@@ -116,3 +116,10 @@ func GetUserStats(chatID int64) (*user.User, error) {
 	// Возвращаем объект User
 	return &u, nil
 }
+
+func UpdateUserStats(chatID int64, u1 *user.User) error {
+	// Запрос на обновление значений атрибутов таблицы с указанным user_id
+	query := "UPDATE users SET number_of_wins = $1, number_of_defeats = $2, number_of_draws = $3 WHERE user_id = $4"
+	_, err := db.Exec(query, u1.NumberOfWins, u1.NumberOfDefeats, u1.NumberOfDraws, chatID)
+	return err
+}

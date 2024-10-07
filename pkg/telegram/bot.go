@@ -81,7 +81,12 @@ func sendPlayMenu(chatID int64) {
 	msg := tgbotapi.NewMessage(chatID, "Выберите ход:")
 	msg.ReplyMarkup = inlineKeyboard
 
-	bot.Send(msg)
+	sentMsg, err := bot.Send(msg)
+	if err == nil {
+		lastMessageID = sentMsg.MessageID // Сохраняем идентификатор отправленного сообщения
+	} else {
+		log.Printf("Ошибка при отправке сообщения: %v", err)
+	}
 }
 
 // Функция для обработки команд
@@ -131,6 +136,9 @@ func HandlePlayButton(chatID int64) {
 func HandleMoveButton(callbackQuery *tgbotapi.CallbackQuery) {
 	chatID := callbackQuery.Message.Chat.ID
 
+	// Удаляем предыдущее сообщение, если оно существует
+	DeleteLastMessage(chatID)
+
 	move := callbackQuery.Data
 
 	botMoveInt := generateRandomMove()
@@ -144,26 +152,47 @@ func HandleMoveButton(callbackQuery *tgbotapi.CallbackQuery) {
 
 	result := resultMatrix[moveInt][botMoveInt]
 
-	text := handleGameResult(botMove, result)
+	text := handleGameResult(chatID, botMove, result)
 
 	msg := tgbotapi.NewMessage(chatID, text)
-	bot.Send(msg)
+	sentMsg, err := bot.Send(msg)
 	sendMainMenu(chatID, "Сыграть ещё раз?\n")
+	if err == nil {
+		lastMessageID = sentMsg.MessageID // Сохраняем идентификатор отправленного сообщения
+	} else {
+		log.Printf("Ошибка при отправке сообщения: %v", err)
+	}
 }
 
 // Обработка результата игры
-func handleGameResult(botMove string, gameCode int) string {
+func handleGameResult(chatID int64, botMove string, gameCode int) string {
+	user, err := database.GetUserStats(chatID) // Используем функцию из database
+	if err != nil {
+		log.Printf("Пользователь не найден: %v", err)
+		return "Произошла ошибка. Попробуйте ещё раз."
+	}
+
 	text := ""
 	suffix := fmt.Sprintf("\nХод бота: %s", botMove)
+
 	switch gameCode {
-	case 0:
-		text = "Вы проиграли!" + suffix
-	case 1:
-		text = "Вы выиграли!" + suffix
-	case 2:
+	case 0: // Ничья
 		text = "Ничья!" + suffix
+		user.NumberOfDraws++
+	case 1: // Победа игрока
+		text = "Вы выиграли!" + suffix
+		user.NumberOfWins++
+	case 2: // Победа бота
+		text = "Вы проиграли!" + suffix
+		user.NumberOfDefeats++
 	default:
 		text = "Произошла ошибка. Попробуйте ещё раз."
+	}
+
+	err = database.UpdateUserStats(chatID, user)
+	if err != nil {
+		log.Printf("Данные пользователя не удалось обновить: %v", err)
+		return "Произошла ошибка. Попробуйте ещё раз."
 	}
 	return text
 }
