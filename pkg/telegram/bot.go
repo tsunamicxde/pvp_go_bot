@@ -3,15 +3,36 @@ package telegram
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"telegram_pvp_bot/pkg/database"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"golang.org/x/exp/rand"
 )
 
 // Определяем глобальные переменные
+
+// Переменная бота
 var bot *tgbotapi.BotAPI
+
+// ID последнего сообщения от бота
 var lastMessageID int
+
+// Карта ходов игрока
+var Moves = map[string]int{
+	"👊":  0,
+	"✌️": 1,
+	"✋":  2,
+}
+
+// Матрица результата игры
+// 0 - ничья, 1 - победа игрока, 2 - победа бота
+var resultMatrix = [3][3]int{
+	{0, 1, 2}, // Игрок выбирает 0
+	{2, 0, 1}, // Игрок выбирает 1
+	{1, 2, 0}, // Игрок выбирает 2
+}
 
 // Инициализация бота
 func InitBot(token string) {
@@ -27,9 +48,10 @@ func InitBot(token string) {
 }
 
 // Вывод главного меню
-func sendMainMenu(chatID int64) {
+func sendMainMenu(chatID int64, welcomeText string) {
 	// Удаляем предыдущее сообщение, если оно существует
 	DeleteLastMessage(chatID)
+
 	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🎲 Играть", "play"),
@@ -37,7 +59,26 @@ func sendMainMenu(chatID int64) {
 		),
 	)
 
-	msg := tgbotapi.NewMessage(chatID, "Добро пожаловать!\n\nЗдесь вы можете сыграть в игру камень-ножницы-бумага.\nВыберите опцию:")
+	msg := tgbotapi.NewMessage(chatID, welcomeText+"Выберите опцию:")
+	msg.ReplyMarkup = inlineKeyboard
+
+	bot.Send(msg)
+}
+
+// Вывод игрового меню
+func sendPlayMenu(chatID int64) {
+	// Удаляем предыдущее сообщение, если оно существует
+	DeleteLastMessage(chatID)
+
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("👊", "👊"),
+			tgbotapi.NewInlineKeyboardButtonData("✌️", "✌️"),
+			tgbotapi.NewInlineKeyboardButtonData("✋", "✋"),
+		),
+	)
+
+	msg := tgbotapi.NewMessage(chatID, "Выберите ход:")
 	msg.ReplyMarkup = inlineKeyboard
 
 	bot.Send(msg)
@@ -61,6 +102,8 @@ func HandleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 		HandlePlayButton(callbackQuery.Message.Chat.ID)
 	case "stats":
 		HandleStatsButton(callbackQuery.Message.Chat.ID)
+	case "👊", "✌️", "✋":
+		HandleMoveButton(callbackQuery)
 	default:
 		msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, "Произошла ошибка. Попробуйте ещё раз.")
 		bot.Send(msg)
@@ -69,7 +112,7 @@ func HandleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 
 // Обработчик команды /start
 func HandleStartCommand(chatID int64) {
-	sendMainMenu(chatID)
+	sendMainMenu(chatID, "Добро пожаловать!\n\nЗдесь вы можете сыграть в игру камень-ножницы-бумага.\n")
 	err := database.InsertUserData(chatID) // Используем функцию из database
 	if err != nil {
 		log.Fatalf("Ошибка при добавлении пользователя: %v", err)
@@ -81,20 +124,72 @@ func HandlePlayButton(chatID int64) {
 	// Удаляем предыдущее сообщение, если оно существует
 	DeleteLastMessage(chatID)
 
-	msg := tgbotapi.NewMessage(chatID, "Игра началась :)")
+	sendPlayMenu(chatID)
+}
 
-	sentMsg, err := bot.Send(msg)
-	if err == nil {
-		lastMessageID = sentMsg.MessageID // Сохраняем идентификатор отправленного сообщения
-	} else {
-		log.Printf("Ошибка при отправке сообщения: %v", err)
+// Обработчик хода игрока
+func HandleMoveButton(callbackQuery *tgbotapi.CallbackQuery) {
+	chatID := callbackQuery.Message.Chat.ID
+
+	move := callbackQuery.Data
+
+	botMoveInt := generateRandomMove()
+	botMove, isMapContainsKey := findKeyByValue(Moves, botMoveInt)
+
+	if !isMapContainsKey {
+		return
 	}
+
+	moveInt := Moves[move]
+
+	result := resultMatrix[moveInt][botMoveInt]
+
+	text := handleGameResult(botMove, result)
+
+	msg := tgbotapi.NewMessage(chatID, text)
+	bot.Send(msg)
+	sendMainMenu(chatID, "Сыграть ещё раз?\n")
+}
+
+// Обработка результата игры
+func handleGameResult(botMove string, gameCode int) string {
+	text := ""
+	suffix := fmt.Sprintf("\nХод бота: %s", botMove)
+	switch gameCode {
+	case 0:
+		text = "Вы проиграли!" + suffix
+	case 1:
+		text = "Вы выиграли!" + suffix
+	case 2:
+		text = "Ничья!" + suffix
+	default:
+		text = "Произошла ошибка. Попробуйте ещё раз."
+	}
+	return text
+}
+
+// Генерация случайного хода бота
+func generateRandomMove() int {
+	rand.Seed(uint64(time.Now().UnixNano()))
+	randomNum := rand.Intn(3)
+	return randomNum
+}
+
+// Функция для поиска ключа по значению в словаре
+func findKeyByValue(myMap map[string]int, value int) (string, bool) {
+	for key, val := range myMap {
+		if val == value {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 // Обработчик кнопки "Моя статистика"
 func HandleStatsButton(chatID int64) {
 	// Удаляем предыдущее сообщение, если оно существует
 	DeleteLastMessage(chatID)
+
 	user, err := database.GetUserStats(chatID) // Используем функцию из database
 	if err != nil {
 		log.Printf("Пользователь не найден: %v", err)
